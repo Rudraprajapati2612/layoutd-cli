@@ -1,3 +1,5 @@
+use std::path::{Path, PathBuf};
+
 use clap::{Parser,Subcommand};
 
 #[derive(Parser)]
@@ -9,16 +11,28 @@ struct Cli{
 
 #[derive(Subcommand)]
 enum Command{
-    Diff,
-    Gen,
-    Check
+    Diff{
+        old : PathBuf,
+        new :PathBuf,
+        #[arg(long)]
+        account : String
+    },
+    Gen{
+        old : PathBuf,
+        new :PathBuf,
+        #[arg(long)]
+        account : String
+    },
+    Check{
+        old : PathBuf,
+        new :PathBuf,
+        #[arg(long)]
+        account : String
+    }
 }
+
 fn main() {
     let cli = Cli::parse();
 
-    match cli.command {
-        Command::Diff => println!("not implemented"),
-        Command::Gen => println!("not implemented"),
-        Command::Check => println!("not implemented"),
-    }
+   
 }
