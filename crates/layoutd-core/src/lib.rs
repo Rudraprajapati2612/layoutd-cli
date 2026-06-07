@@ -3,6 +3,7 @@ pub fn add(left: u64, right: u64) -> u64 {
 }
 pub mod idl;
 pub mod borsh;
+pub mod diff;
 #[cfg(test)]
 mod tests {
     use super::*;
