@@ -144,147 +144,147 @@ pub fn parse_field_type(value:&serde_json::Value) -> FieldType{
 
 
 
-// // Tests 
-// #[cfg(test)]
-// mod tests {
-//     use super::*;
-//     use std::path::Path;
+// Tests 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::Path;
 
-//     fn idl_path() -> std::path::PathBuf {
-//         Path::new(env!("CARGO_MANIFEST_DIR")).join("../../idl.json")
-//     }
+    fn idl_path() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../idl.json")
+    }
 
-//     // EscrowVault Test 
+    // EscrowVault Test 
 
-//     #[test]
-//     fn escrow_vault_parses_successfully() {
-//         parse_idl(&idl_path(), "EscrowVault").unwrap();
-//     }
+    #[test]
+    fn escrow_vault_parses_successfully() {
+        parse_idl(&idl_path(), "EscrowVault").unwrap();
+    }
 
-//     #[test]
-//     fn escrow_vault_name() {
-//         let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
-//         assert_eq!(def.name, "EscrowVault");
-//     }
+    #[test]
+    fn escrow_vault_name() {
+        let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
+        assert_eq!(def.name, "EscrowVault");
+    }
 
-//     #[test]
-//     fn escrow_vault_field_count() {
-//         let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
-//         assert_eq!(def.fields.len(), 12);
-//     }
+    #[test]
+    fn escrow_vault_field_count() {
+        let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
+        assert_eq!(def.fields.len(), 12);
+    }
 
-//     #[test]
-//     fn escrow_vault_field_order_matches_indices() {
-//         let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
-//         for (i, field) in def.fields.iter().enumerate() {
-//             assert_eq!(field.index, i, "field '{}' has wrong index", field.name);
-//         }
-//     }
+    #[test]
+    fn escrow_vault_field_order_matches_indices() {
+        let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
+        for (i, field) in def.fields.iter().enumerate() {
+            assert_eq!(field.index, i, "field '{}' has wrong index", field.name);
+        }
+    }
 
-//     #[test]
-//     fn escrow_vault_all_fields() {
-//         let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
+    #[test]
+    fn escrow_vault_all_fields() {
+        let def = parse_idl(&idl_path(), "EscrowVault").unwrap();
 
-//         let expected: &[(&str, FieldType)] = &[
-//             ("market",                    FieldType::Pubkey),
-//             ("mrarket_registery_program", FieldType::Pubkey),
-//             ("usdc_vault",                FieldType::Pubkey),
-//             ("yes_token_mint",            FieldType::Pubkey),
-//             ("no_token_mint",             FieldType::Pubkey),
-//             ("total_locked_collateral",   FieldType::U64),
-//             ("total_yes_minted",          FieldType::U64),
-//             ("total_no_minted",           FieldType::U64),
-//             ("is_settled",                FieldType::Bool),
-//             ("is_minting_paused",         FieldType::Bool),
-//             ("admin",                     FieldType::Pubkey),
-//             ("bump",                      FieldType::U8),
-//         ];
+        let expected: &[(&str, FieldType)] = &[
+            ("market",                    FieldType::Pubkey),
+            ("mrarket_registery_program", FieldType::Pubkey),
+            ("usdc_vault",                FieldType::Pubkey),
+            ("yes_token_mint",            FieldType::Pubkey),
+            ("no_token_mint",             FieldType::Pubkey),
+            ("total_locked_collateral",   FieldType::U64),
+            ("total_yes_minted",          FieldType::U64),
+            ("total_no_minted",           FieldType::U64),
+            ("is_settled",                FieldType::Bool),
+            ("is_minting_paused",         FieldType::Bool),
+            ("admin",                     FieldType::Pubkey),
+            ("bump",                      FieldType::U8),
+        ];
 
-//         assert_eq!(def.fields.len(), expected.len());
-//         for (field, (exp_name, exp_ty)) in def.fields.iter().zip(expected.iter()) {
-//             assert_eq!(&field.name, exp_name, "field name mismatch at index {}", field.index);
-//             assert_eq!(&field.ty,   exp_ty,   "field type mismatch for '{}'",    field.name);
-//         }
-//     }
+        assert_eq!(def.fields.len(), expected.len());
+        for (field, (exp_name, exp_ty)) in def.fields.iter().zip(expected.iter()) {
+            assert_eq!(&field.name, exp_name, "field name mismatch at index {}", field.index);
+            assert_eq!(&field.ty,   exp_ty,   "field type mismatch for '{}'",    field.name);
+        }
+    }
 
-//     // Market Test 
+    // Market Test 
 
-//     #[test]
-//     fn market_parses_successfully() {
-//         parse_idl(&idl_path(), "Market").unwrap();
-//     }
+    #[test]
+    fn market_parses_successfully() {
+        parse_idl(&idl_path(), "Market").unwrap();
+    }
 
-//     #[test]
-//     fn market_field_count() {
-//         let def = parse_idl(&idl_path(), "Market").unwrap();
-//         assert_eq!(def.fields.len(), 16);
-//     }
+    #[test]
+    fn market_field_count() {
+        let def = parse_idl(&idl_path(), "Market").unwrap();
+        assert_eq!(def.fields.len(), 16);
+    }
 
-//     #[test]
-//     fn market_field_order_matches_indices() {
-//         let def = parse_idl(&idl_path(), "Market").unwrap();
-//         for (i, field) in def.fields.iter().enumerate() {
-//             assert_eq!(field.index, i, "field '{}' has wrong index", field.name);
-//         }
-//     }
+    #[test]
+    fn market_field_order_matches_indices() {
+        let def = parse_idl(&idl_path(), "Market").unwrap();
+        for (i, field) in def.fields.iter().enumerate() {
+            assert_eq!(field.index, i, "field '{}' has wrong index", field.name);
+        }
+    }
 
-//     #[test]
-//     fn market_all_fields() {
-//         let def = parse_idl(&idl_path(), "Market").unwrap();
+    #[test]
+    fn market_all_fields() {
+        let def = parse_idl(&idl_path(), "Market").unwrap();
 
-//         let expected: &[(&str, FieldType)] = &[
-//             ("market_id",          FieldType::Array(Box::new(FieldType::U8), 32)),
-//             ("question",           FieldType::String),
-//             ("description",        FieldType::String),
-//             ("category",           FieldType::String),
-//             ("creator",            FieldType::Pubkey),
-//             ("created_at",         FieldType::I64),
-//             ("expire_at",          FieldType::I64),
-//             ("state",              FieldType::Defined("MarketState".to_string())),
-//             ("yes_token_mint",     FieldType::Pubkey),
-//             ("no_token_mint",      FieldType::Pubkey),
-//             ("escrow_vault",       FieldType::Pubkey),
-//             ("resolution_adapter", FieldType::Pubkey),
-//             ("resolution_source",  FieldType::String),
-//             ("resolution_outcome", FieldType::Option(Box::new(FieldType::Defined("ResultOutcome".to_string())))),
-//             ("resolved_at",        FieldType::Option(Box::new(FieldType::I64))),
-//             ("bump",               FieldType::U8),
-//         ];
+        let expected: &[(&str, FieldType)] = &[
+            ("market_id",          FieldType::Array(Box::new(FieldType::U8), 32)),
+            ("question",           FieldType::String),
+            ("description",        FieldType::String),
+            ("category",           FieldType::String),
+            ("creator",            FieldType::Pubkey),
+            ("created_at",         FieldType::I64),
+            ("expire_at",          FieldType::I64),
+            ("state",              FieldType::Defined("MarketState".to_string())),
+            ("yes_token_mint",     FieldType::Pubkey),
+            ("no_token_mint",      FieldType::Pubkey),
+            ("escrow_vault",       FieldType::Pubkey),
+            ("resolution_adapter", FieldType::Pubkey),
+            ("resolution_source",  FieldType::String),
+            ("resolution_outcome", FieldType::Option(Box::new(FieldType::Defined("ResultOutcome".to_string())))),
+            ("resolved_at",        FieldType::Option(Box::new(FieldType::I64))),
+            ("bump",               FieldType::U8),
+        ];
 
-//         assert_eq!(def.fields.len(), expected.len());
-//         for (field, (exp_name, exp_ty)) in def.fields.iter().zip(expected.iter()) {
-//             assert_eq!(&field.name, exp_name, "field name mismatch at index {}", field.index);
-//             assert_eq!(&field.ty,   exp_ty,   "field type mismatch for '{}'",    field.name);
-//         }
-//     }
+        assert_eq!(def.fields.len(), expected.len());
+        for (field, (exp_name, exp_ty)) in def.fields.iter().zip(expected.iter()) {
+            assert_eq!(&field.name, exp_name, "field name mismatch at index {}", field.index);
+            assert_eq!(&field.ty,   exp_ty,   "field type mismatch for '{}'",    field.name);
+        }
+    }
 
-//     // Error paths Test 
+    // Error paths Test 
 
-//     #[test]
-//     fn unknown_account_name_returns_error() {
-//         let err = parse_idl(&idl_path(), "DoesNotExist").unwrap_err();
-//         assert!(err.contains("DoesNotExist"), "error should name the account: {err}");
-//     }
+    #[test]
+    fn unknown_account_name_returns_error() {
+        let err = parse_idl(&idl_path(), "DoesNotExist").unwrap_err();
+        assert!(err.contains("DoesNotExist"), "error should name the account: {err}");
+    }
 
-//     #[test]
-//     fn enum_type_returns_error_not_account() {
-//         // MarketState is an enum in types — must be rejected with a clear message
-//         let err = parse_idl(&idl_path(), "MarketState").unwrap_err();
-//         assert!(err.contains("enum"), "error should say it's an enum: {err}");
-//     }
+    #[test]
+    fn enum_type_returns_error_not_account() {
+        // MarketState is an enum in types — must be rejected with a clear message
+        let err = parse_idl(&idl_path(), "MarketState").unwrap_err();
+        assert!(err.contains("enum"), "error should say it's an enum: {err}");
+    }
 
-//     #[test]
-//     fn bad_path_returns_error() {
-//         let err = parse_idl(Path::new("/nonexistent/path/idl.json"), "EscrowVault").unwrap_err();
-//         assert!(err.contains("/nonexistent/path/idl.json"), "error should contain the missing path: {err}");
-//     }
+    #[test]
+    fn bad_path_returns_error() {
+        let err = parse_idl(Path::new("/nonexistent/path/idl.json"), "EscrowVault").unwrap_err();
+        assert!(err.contains("/nonexistent/path/idl.json"), "error should contain the missing path: {err}");
+    }
 
-//     #[test]
-//     fn malformed_empty_array_type_returns_unknown() {
-//         let ty = parse_field_type(&serde_json::json!({
-//             "array": []
-//         }));
+    #[test]
+    fn malformed_empty_array_type_returns_unknown() {
+        let ty = parse_field_type(&serde_json::json!({
+            "array": []
+        }));
 
-//         assert!(matches!(ty, FieldType::Unknown(_)));
-//     }
-// }
+        assert!(matches!(ty, FieldType::Unknown(_)));
+    }
+}
