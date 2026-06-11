@@ -1,182 +1,182 @@
+use std::collections::{HashMap, HashSet};
 
+use crate::borsh::{FieldLayout, Layout};
+use crate::idl::FieldType;
 
-
-use std::{collections::HashMap};
-
-use crate::{borsh::{FieldLayout, Layout}, idl::FieldType};
-
-#[derive(Debug,Clone,PartialEq)]
-pub enum ChangeKind{
+#[derive(Debug, Clone, PartialEq)]
+pub enum ChangeKind {
     Unchanged,
 
-    Added {at_index:usize},
+    Added { at_index: usize },
 
-    Removed {from_index:usize},
+    Removed { from_index: usize },
 
-    TypeChanged{
-        old_type : FieldType,
-        new_type : FieldType
+    Renamed { from_name: String },
+
+    TypeChanged {
+        old_type: FieldType,
+        new_type: FieldType,
     },
 
-    Reordered{
-        old_index : usize,
-        new_index : usize
-    },
-
-    TypeChangedAndReordered{
-        old_type : FieldType,
+    Reordered {
         old_index: usize,
-        new_type : FieldType,
-        new_index: usize
+        new_index: usize,
+    },
+
+    TypeChangedAndReordered {
+        old_type: FieldType,
+        old_index: usize,
+        new_type: FieldType,
+        new_index: usize,
     },
 }
 
-// diff engine Will produce Vec<FieldChange>
-// classifier will consume Vec<FieldChange> 
-#[derive(Debug,Clone,PartialEq)]
-pub struct FieldChange{
-    pub name : String,
-
-    pub kind : ChangeKind,
-
-    // field info for a old idl 
-    // None for new Field 
-    pub old_layout : Option<FieldLayout>,
-
-    // field info for new idl
-    // None for removed field
-    pub new_layout : Option<FieldLayout>
-
+#[derive(Debug, Clone, PartialEq)]
+pub struct FieldChange {
+    pub name: String,
+    pub kind: ChangeKind,
+    /// field info from the old layout; None for newly added fields
+    pub old_layout: Option<FieldLayout>,
+    /// field info from the new layout; None for removed fields
+    pub new_layout: Option<FieldLayout>,
 }
 
-pub fn diff(old:&Layout,new : &Layout) -> Vec<FieldChange>{
-    let mut changes = Vec::new();
+pub fn diff(old: &Layout, new: &Layout) -> Vec<FieldChange> {
+    let old_map: HashMap<&str, &FieldLayout> =
+        old.fields.iter().map(|f| (f.name.as_str(), f)).collect();
+    let new_map: HashMap<&str, &FieldLayout> =
+        new.fields.iter().map(|f| (f.name.as_str(), f)).collect();
 
-    let old_map:HashMap<&str,&FieldLayout>= old.fields.iter().map(|f|(f.name.as_str(),f)).collect(); 
+    let mut matched: Vec<FieldChange> = Vec::new();
+    let mut removed: Vec<FieldChange> = Vec::new();
+    let mut added: Vec<FieldChange> = Vec::new();
 
-    let new_map:HashMap<&str,&FieldLayout> = new.fields.iter().map(|f|(f.name.as_str(),f)).collect();
-
-    for old_field in &old.fields{
-        // check old fields in new map because if old filed is exist in new map then {Unchanged/TypeChanged/Reorderd/}
-
-        if let Some(new_field) = new_map.get(old_field.name.as_str()){
-            let kind = classify_change(old_field, new_field);
-
-            changes.push(FieldChange{
-                name : old_field.name.clone(),
-                kind,
-                old_layout : Some(old_field.clone()),
-                new_layout : Some((*new_field).clone())
+    for old_field in &old.fields {
+        if let Some(new_field) = new_map.get(old_field.name.as_str()) {
+            matched.push(FieldChange {
+                name: old_field.name.clone(),
+                kind: classify_change(old_field, new_field),
+                old_layout: Some(old_field.clone()),
+                new_layout: Some((*new_field).clone()),
             });
-        }else {
-            // Field is Present in old Field it is removed
-            changes.push(FieldChange{
-                name : old_field.name.clone(),
-                kind : ChangeKind::Removed { from_index: old_field.index },
-                old_layout : Some(old_field.clone()),
-                new_layout : None
+        } else {
+            removed.push(FieldChange {
+                name: old_field.name.clone(),
+                kind: ChangeKind::Removed { from_index: old_field.index },
+                old_layout: Some(old_field.clone()),
+                new_layout: None,
             });
         }
     }
 
-    // in this case if field is not present in old and just freshly added in new
-
-    for new_field in &new.fields{
-        // it checks for new filed in old map so this means field is added into new version
+    for new_field in &new.fields {
         if !old_map.contains_key(new_field.name.as_str()) {
-            changes.push(FieldChange{
-                name : new_field.name.clone(),
-                kind : ChangeKind::Added { at_index: new_field.index },
-                old_layout : None,
-                new_layout : Some(new_field.clone())
+            added.push(FieldChange {
+                name: new_field.name.clone(),
+                kind: ChangeKind::Added { at_index: new_field.index },
+                old_layout: None,
+                new_layout: Some(new_field.clone()),
             });
         }
     }
 
-    // Sort by old index first, then new index
-    // This gives a stable, readable order in the output:
-    // existing fields in their original order, then added fields at the end
+    // Rename inference: a removed field and an added field at the same index with the same type
+    // is a rename. Only commit when exactly one added field matches each removed field.
+    let mut rename_pairs: Vec<(usize, usize)> = Vec::new(); // (removed_idx, added_idx)
+
+    for (r_idx, r) in removed.iter().enumerate() {
+        let r_fl = r.old_layout.as_ref().unwrap();
+        let candidates: Vec<usize> = added
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| {
+                let a_fl = a.new_layout.as_ref().unwrap();
+                a_fl.index == r_fl.index && a_fl.ty == r_fl.ty
+            })
+            .map(|(i, _)| i)
+            .collect();
+        if candidates.len() == 1 {
+            rename_pairs.push((r_idx, candidates[0]));
+        }
+    }
+
+    // If two removed fields somehow claimed the same added slot, cancel both.
+    let mut added_claim_count: HashMap<usize, usize> = HashMap::new();
+    for (_, a_idx) in &rename_pairs {
+        *added_claim_count.entry(*a_idx).or_insert(0) += 1;
+    }
+    let valid_renames: Vec<(usize, usize)> = rename_pairs
+        .into_iter()
+        .filter(|(_, a_idx)| added_claim_count[a_idx] == 1)
+        .collect();
+
+    let renamed_r: HashSet<usize> = valid_renames.iter().map(|(r, _)| *r).collect();
+    let renamed_a: HashSet<usize> = valid_renames.iter().map(|(_, a)| *a).collect();
+
+    let mut changes: Vec<FieldChange> = Vec::new();
+
+    for (r_idx, a_idx) in &valid_renames {
+        let old_fl = removed[*r_idx].old_layout.as_ref().unwrap();
+        let new_fl = added[*a_idx].new_layout.as_ref().unwrap();
+        changes.push(FieldChange {
+            name: new_fl.name.clone(),
+            kind: ChangeKind::Renamed { from_name: old_fl.name.clone() },
+            old_layout: Some(old_fl.clone()),
+            new_layout: Some(new_fl.clone()),
+        });
+    }
+
+    for (r_idx, r) in removed.into_iter().enumerate() {
+        if !renamed_r.contains(&r_idx) {
+            changes.push(r);
+        }
+    }
+
+    for (a_idx, a) in added.into_iter().enumerate() {
+        if !renamed_a.contains(&a_idx) {
+            changes.push(a);
+        }
+    }
+
+    changes.extend(matched);
+
+    // Sort by old index first (for removed/renamed/matched), new index for added-only fields.
     changes.sort_by_key(|c| match &c.kind {
-    ChangeKind::Removed { from_index } => *from_index,
-
-    _ => c
-        .new_layout
-        .as_ref()
-        .expect("non-removed changes always have new_layout")
-        .index,
+        ChangeKind::Removed { from_index } => *from_index,
+        _ => c.new_layout.as_ref().expect("non-removed change must have new_layout").index,
     });
-    changes
 
+    changes
 }
 
-fn classify_change(old:&FieldLayout,new : &FieldLayout)->ChangeKind{
-    let typed_change = old.ty != new.ty;
-    let index_change = old.index != new.index;
+fn classify_change(old: &FieldLayout, new: &FieldLayout) -> ChangeKind {
+    let type_changed = old.ty != new.ty;
+    let index_changed = old.index != new.index;
 
-    match (typed_change,index_change){
-        (false,false) => ChangeKind::Unchanged,
-
-        (true,false) => ChangeKind::TypeChanged {
+    match (type_changed, index_changed) {
+        (false, false) => ChangeKind::Unchanged,
+        (true, false) => ChangeKind::TypeChanged {
             old_type: old.ty.clone(),
-            new_type: new.ty.clone()
+            new_type: new.ty.clone(),
         },
-
-        (false,true) => ChangeKind::Reordered {
+        (false, true) => ChangeKind::Reordered {
             old_index: old.index,
-            new_index: new.index
+            new_index: new.index,
         },
-
-        (true,true) => ChangeKind::TypeChangedAndReordered { 
+        (true, true) => ChangeKind::TypeChangedAndReordered {
             old_type: old.ty.clone(),
             old_index: old.index,
             new_type: new.ty.clone(),
-            new_index: new.index
-        }
-
+            new_index: new.index,
+        },
     }
 }
-
-// fn types_equal(a:&FieldType,b:&FieldType) -> bool{
-//     match (a,b) {
-//         (FieldType::U8,     FieldType::U8)     => true,
-//         (FieldType::U16,    FieldType::U16)    => true,
-//         (FieldType::U32,    FieldType::U32)    => true,
-//         (FieldType::U64,    FieldType::U64)    => true,
-//         (FieldType::U128,   FieldType::U128)   => true,
-//         (FieldType::I8,     FieldType::I8)     => true,
-//         (FieldType::I16,    FieldType::I16)    => true,
-//         (FieldType::I32,    FieldType::I32)    => true,
-//         (FieldType::I64,    FieldType::I64)    => true,
-//         (FieldType::I128,   FieldType::I128)   => true,
-//         (FieldType::Bool,   FieldType::Bool)   => true,
-//         (FieldType::F32,    FieldType::F32)    => true,
-//         (FieldType::F64,    FieldType::F64)    => true,
-//         (FieldType::Pubkey, FieldType::Pubkey) => true,
-//         (FieldType::String, FieldType::String) => true,
-
-//         (FieldType::Vec(a_inner),    FieldType::Vec(b_inner))    => types_equal(a_inner, b_inner),
-//         (FieldType::Option(a_inner), FieldType::Option(b_inner)) => types_equal(a_inner, b_inner),
-//         (FieldType::Array(a_inner, a_len), FieldType::Array(b_inner, b_len)) => {
-//             a_len == b_len && types_equal(a_inner, b_inner)
-//         }
-
-//         (FieldType::Unknown(a_s), FieldType::Unknown(b_s)) => a_s == b_s,
-
-//         (FieldType::Defined(a_name), FieldType::Defined(b_name)) => {
-//           a_name == b_name
-//         },
-
-//         // Anything else — different types
-//         _ => false,
-//     }
-// }
-
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::borsh::compute_layout;
     use crate::idl::{AccountDef, FieldDef, FieldType};
-    use crate::borsh::{compute_layout};
 
     fn make_layout(name: &str, fields: Vec<(&str, FieldType)>) -> Layout {
         let def = AccountDef {
@@ -184,17 +184,12 @@ mod tests {
             fields: fields
                 .into_iter()
                 .enumerate()
-                .map(|(i, (n, ty))| FieldDef {
-                    name: n.to_string(),
-                    ty,
-                    index: i,
-                })
+                .map(|(i, (n, ty))| FieldDef { name: n.to_string(), ty, index: i })
                 .collect(),
         };
         compute_layout(&def)
     }
 
-    // ── Test 1: nothing changed ──
     #[test]
     fn unchanged() {
         let old = make_layout("Vault", vec![
@@ -209,7 +204,6 @@ mod tests {
         assert!(changes.iter().all(|c| c.kind == ChangeKind::Unchanged));
     }
 
-    // ── Test 2: field added at end ──
     #[test]
     fn field_added_at_end() {
         let old = make_layout("Vault", vec![
@@ -219,7 +213,7 @@ mod tests {
         let new = make_layout("Vault", vec![
             ("authority", FieldType::Pubkey),
             ("balance",   FieldType::U64),
-            ("bump",      FieldType::U8),   // new
+            ("bump",      FieldType::U8),
         ]);
         let changes = diff(&old, &new);
         let added: Vec<_> = changes.iter()
@@ -229,7 +223,6 @@ mod tests {
         assert_eq!(added[0].name, "bump");
     }
 
-    // ── Test 3: field removed ──
     #[test]
     fn field_removed() {
         let old = make_layout("Vault", vec![
@@ -240,7 +233,6 @@ mod tests {
         let new = make_layout("Vault", vec![
             ("authority", FieldType::Pubkey),
             ("balance",   FieldType::U64),
-            // bump removed
         ]);
         let changes = diff(&old, &new);
         let removed: Vec<_> = changes.iter()
@@ -250,23 +242,14 @@ mod tests {
         assert_eq!(removed[0].name, "bump");
     }
 
-    // ── Test 4: type changed ──
     #[test]
     fn type_changed() {
-        let old = make_layout("Vault", vec![
-            ("balance", FieldType::U32),  // was u32
-        ]);
-        let new = make_layout("Vault", vec![
-            ("balance", FieldType::U64),  // now u64
-        ]);
+        let old = make_layout("Vault", vec![("balance", FieldType::U32)]);
+        let new = make_layout("Vault", vec![("balance", FieldType::U64)]);
         let changes = diff(&old, &new);
-        assert!(matches!(
-            changes[0].kind,
-            ChangeKind::TypeChanged { .. }
-        ));
+        assert!(matches!(changes[0].kind, ChangeKind::TypeChanged { .. }));
     }
 
-    // ── Test 5: field reordered ──
     #[test]
     fn field_reordered() {
         let old = make_layout("Vault", vec![
@@ -276,7 +259,7 @@ mod tests {
         ]);
         let new = make_layout("Vault", vec![
             ("authority", FieldType::Pubkey),
-            ("balance",   FieldType::U64),  // moved up
+            ("balance",   FieldType::U64),
             ("bump",      FieldType::U8),
         ]);
         let changes = diff(&old, &new);
@@ -284,5 +267,78 @@ mod tests {
             .filter(|c| matches!(c.kind, ChangeKind::Reordered { .. }))
             .collect();
         assert!(!reordered.is_empty());
+    }
+
+    #[test]
+    fn rename_detected_when_same_type_and_index() {
+        let old = make_layout("Vault", vec![
+            ("owner",  FieldType::Pubkey),
+            ("amount", FieldType::U64),
+            ("bump",   FieldType::U8),
+        ]);
+        let new = make_layout("Vault", vec![
+            ("owner",   FieldType::Pubkey),
+            ("balance", FieldType::U64), // renamed from amount, same type+index
+            ("bump",    FieldType::U8),
+        ]);
+        let changes = diff(&old, &new);
+        let renamed = changes.iter().find(|c| matches!(c.kind, ChangeKind::Renamed { .. }));
+        assert!(renamed.is_some(), "expected a rename to be detected");
+        let r = renamed.unwrap();
+        assert_eq!(r.name, "balance");
+        assert!(matches!(&r.kind, ChangeKind::Renamed { from_name } if from_name == "amount"));
+    }
+
+    #[test]
+    fn rename_not_detected_when_types_differ() {
+        // Different type → not a rename, must be Removed + Added
+        let old = make_layout("Vault", vec![
+            ("owner",  FieldType::Pubkey),
+            ("amount", FieldType::U32),
+            ("bump",   FieldType::U8),
+        ]);
+        let new = make_layout("Vault", vec![
+            ("owner",   FieldType::Pubkey),
+            ("balance", FieldType::U64), // different type — not a rename
+            ("bump",    FieldType::U8),
+        ]);
+        let changes = diff(&old, &new);
+        assert!(!changes.iter().any(|c| matches!(c.kind, ChangeKind::Renamed { .. })));
+        assert!(changes.iter().any(|c| c.name == "amount" && matches!(c.kind, ChangeKind::Removed { .. })));
+        assert!(changes.iter().any(|c| c.name == "balance" && matches!(c.kind, ChangeKind::Added { .. })));
+    }
+
+    #[test]
+    fn multiple_simultaneous_renames_detected() {
+        let old = make_layout("Vault", vec![
+            ("alpha", FieldType::Pubkey),
+            ("beta",  FieldType::U64),
+        ]);
+        let new = make_layout("Vault", vec![
+            ("gamma", FieldType::Pubkey), // renamed from alpha
+            ("delta", FieldType::U64),    // renamed from beta
+        ]);
+        let changes = diff(&old, &new);
+        let renames: Vec<_> = changes.iter()
+            .filter(|c| matches!(c.kind, ChangeKind::Renamed { .. }))
+            .collect();
+        assert_eq!(renames.len(), 2);
+    }
+
+    #[test]
+    fn type_changed_and_reordered_detected() {
+        let old = make_layout("Vault", vec![
+            ("authority", FieldType::Pubkey),
+            ("count",     FieldType::U32),
+            ("flag",      FieldType::Bool),
+        ]);
+        let new = make_layout("Vault", vec![
+            ("authority", FieldType::Pubkey),
+            ("flag",      FieldType::Bool),
+            ("count",     FieldType::U64), // both reordered and type widened
+        ]);
+        let changes = diff(&old, &new);
+        let tc_r = changes.iter().find(|c| c.name == "count").unwrap();
+        assert!(matches!(tc_r.kind, ChangeKind::TypeChangedAndReordered { .. }));
     }
 }
