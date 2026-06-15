@@ -1,0 +1,59 @@
+name: 'layoutd — Solana account layout safety check'
+description: 'Detect unsafe Solana account layout changes and block them in CI before they reach production.'
+author: 'layoutd'
+
+branding:
+  icon: 'shield'
+  color: 'green'
+
+inputs:
+  old-idl:
+    description: 'Path to the old (currently deployed) IDL JSON file'
+    required: true
+  new-idl:
+    description: 'Path to the new (proposed) IDL JSON file'
+    required: true
+  account:
+    description: 'Account struct name to check (e.g. "EscrowVault")'
+    required: true
+  sarif-output:
+    description: 'Path to write the SARIF 2.1.0 report (used for GitHub PR annotations)'
+    required: false
+    default: 'layoutd.sarif'
+
+runs:
+  using: 'composite'
+  steps:
+    - name: Install Rust stable
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install layoutd
+      shell: bash
+      # TODO: replace with `cargo install layoutd` once published to crates.io
+      run: cargo install --path ${{ github.action_path }}/crates/layoutd-cli --locked
+
+    - name: Run layoutd check
+      shell: bash
+      # Capture the exit code manually so the SARIF upload step always runs
+      # even when dangerous changes are found.
+      run: |
+        layoutd check \
+          "${{ inputs.old-idl }}" \
+          "${{ inputs.new-idl }}" \
+          --account "${{ inputs.account }}" \
+          --sarif   "${{ inputs.sarif-output }}" \
+          || echo "LAYOUTD_EXIT=1" >> "$GITHUB_ENV"
+
+    - name: Upload SARIF to GitHub
+      uses: github/codeql-action/upload-sarif@v3
+      if: always()
+      with:
+        sarif_file: ${{ inputs.sarif-output }}
+        category: layoutd-${{ inputs.account }}
+
+    - name: Fail on dangerous changes
+      shell: bash
+      if: env.LAYOUTD_EXIT == '1'
+      run: |
+        echo "layoutd found dangerous account layout changes. See the Security tab for details."
+        exit 1

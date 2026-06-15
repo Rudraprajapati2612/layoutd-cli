@@ -10,3 +10,4 @@ path = "src/main.rs"
 [dependencies]
 layoutd-core = { path = "../layoutd-core" }
 clap = { version = "4", features = ["derive"] }
+serde_json = "1"

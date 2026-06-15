@@ -1,0 +1,34 @@
+name: Account Layout Safety
+
+on:
+  pull_request:
+    paths:
+      - '**/*.json'   # re-run whenever any IDL file changes
+
+permissions:
+  contents: read
+  security-events: write   # required for upload-sarif
+
+jobs:
+  layout-check:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2   # need the base commit to extract the old IDL
+
+      # Extract the version of the IDL that existed before this PR's changes.
+      # Adjust the path to match where your IDL lives in the repo.
+      - name: Extract old IDL from base commit
+        run: |
+          git show HEAD~1:idl.json > old_idl.json \
+            || cp idl.json old_idl.json   # first commit: compare against itself (all-safe)
+
+      - name: Check EscrowVault layout
+        uses: ./
+        with:
+          old-idl: old_idl.json
+          new-idl: idl.json
+          account: EscrowVault
+          sarif-output: layoutd-escrowvault.sarif

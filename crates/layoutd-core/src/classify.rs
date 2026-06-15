@@ -1,7 +1,7 @@
 use crate::diff::{ChangeKind, FieldChange};
 use crate::idl::FieldType;
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Safety {
     Safe,
     Review,
