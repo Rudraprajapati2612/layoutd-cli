@@ -2,10 +2,19 @@
 name = "layoutd-core"
 version = "0.1.0"
 edition = "2024"
+description = "Core diff and classification engine for Anchor/Solana account struct layout analysis"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Rudraprajapati2612/layoutd-cli"
+keywords = ["solana", "anchor", "borsh", "layout", "diff"]
+categories = ["development-tools", "parsing"]
+readme = "../../README.md"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+syn = { version = "2", features = ["full"] }
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
+borsh = { version = "1", features = ["derive"] }

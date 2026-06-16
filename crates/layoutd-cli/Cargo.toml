@@ -1,13 +1,24 @@
 [package]
-name = "layoutd-cli"
+name = "layoutd"
 version = "0.1.0"
 edition = "2024"
+description = "CLI tool to diff and classify Anchor/Solana account struct layout changes as Safe, Review, or Danger"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Rudraprajapati2612/layoutd-cli"
+keywords = ["solana", "anchor", "borsh", "layout", "cli"]
+categories = ["development-tools", "command-line-utilities"]
+readme = "../../README.md"
 
 [[bin]]
 name = "layoutd"
 path = "src/main.rs"
 
 [dependencies]
-layoutd-core = { path = "../layoutd-core" }
+layoutd-core = { version = "0.1.0", path = "../layoutd-core" }
 clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+
+[dev-dependencies]
+assert_cmd = "2"
+tempfile = "3"
 serde_json = "1"

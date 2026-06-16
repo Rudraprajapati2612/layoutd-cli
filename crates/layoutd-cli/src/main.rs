@@ -4,10 +4,12 @@ mod sarif;
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
-use layoutd_core::borsh::compute_layout;
+use layoutd_core::borsh::{compute_layout, Layout, Size};
 use layoutd_core::classify::{classify_all, ClassifiedChange, Safety};
-use layoutd_core::diff::{diff, ChangeKind};
+use layoutd_core::diff::{diff_with_hints, ChangeKind};
+use layoutd_core::hints::{load_hints, RenameHint};
 use layoutd_core::idl::{parse_idl, FieldType};
+use layoutd_core::source::parse_source;
 use layoutd_core::zerocopy::{classify_zc_all, compute_zc_layout, zc_to_borsh_layout};
 
 #[derive(Parser)]
@@ -28,6 +30,9 @@ enum Command {
         /// Analyse as a repr(C) zero-copy account (stricter rules)
         #[arg(long)]
         zero_copy: bool,
+        /// Path to a hints JSON file for explicit rename disambiguation
+        #[arg(long)]
+        hints: Option<PathBuf>,
     },
     /// Generate migration code; scaffold dangerous changes
     Gen {
@@ -38,6 +43,9 @@ enum Command {
         /// Analyse as a repr(C) zero-copy account (stricter rules)
         #[arg(long)]
         zero_copy: bool,
+        /// Path to a hints JSON file for explicit rename disambiguation
+        #[arg(long)]
+        hints: Option<PathBuf>,
     },
     /// Exit 1 if any Danger change found (CI gate)
     Check {
@@ -54,51 +62,85 @@ enum Command {
         /// Path to a layoutd.ack file; named dangers are allowed through CI
         #[arg(long)]
         ack: Option<PathBuf>,
+        /// Path to a hints JSON file for explicit rename disambiguation
+        #[arg(long)]
+        hints: Option<PathBuf>,
     },
 }
 
 // ── shared pipeline ───────────────────────────────────────────────────────────
 
-fn run_pipeline(old: &PathBuf, new: &PathBuf, account: &str) -> Vec<ClassifiedChange> {
-    let old_def = parse_idl(old, account).unwrap_or_else(|e| {
-        eprintln!("error reading old IDL: {e}");
-        std::process::exit(1);
-    });
-    let new_def = parse_idl(new, account).unwrap_or_else(|e| {
-        eprintln!("error reading new IDL: {e}");
-        std::process::exit(1);
-    });
-    classify_all(diff(&compute_layout(&old_def), &compute_layout(&new_def)))
+/// Parse an account definition from either an IDL JSON or a Rust source file.
+/// Detection is by extension: `.rs` → source adapter, anything else → IDL adapter.
+fn parse_account(path: &PathBuf, account: &str) -> layoutd_core::idl::AccountDef {
+    let is_rust = path.extension().and_then(|e| e.to_str()) == Some("rs");
+    if is_rust {
+        parse_source(path, account).unwrap_or_else(|e| {
+            eprintln!("error reading source file: {e}");
+            std::process::exit(1);
+        })
+    } else {
+        parse_idl(path, account).unwrap_or_else(|e| {
+            eprintln!("error reading IDL: {e}");
+            std::process::exit(1);
+        })
+    }
 }
 
-fn run_zc_pipeline(old: &PathBuf, new: &PathBuf, account: &str) -> Vec<ClassifiedChange> {
-    let old_def = parse_idl(old, account).unwrap_or_else(|e| {
-        eprintln!("error reading old IDL: {e}");
-        std::process::exit(1);
-    });
-    let new_def = parse_idl(new, account).unwrap_or_else(|e| {
-        eprintln!("error reading new IDL: {e}");
-        std::process::exit(1);
-    });
+fn load_hints_or_exit(path: &Option<PathBuf>) -> Vec<RenameHint> {
+    match path {
+        None => Vec::new(),
+        Some(p) => load_hints(p).unwrap_or_else(|e| {
+            eprintln!("error loading hints file: {e}");
+            std::process::exit(1);
+        }),
+    }
+}
+
+fn run_pipeline(
+    old: &PathBuf,
+    new: &PathBuf,
+    account: &str,
+    hints: &[RenameHint],
+) -> (Vec<ClassifiedChange>, Layout, Layout) {
+    let old_def = parse_account(old, account);
+    let new_def = parse_account(new, account);
+    let old_layout = compute_layout(&old_def);
+    let new_layout = compute_layout(&new_def);
+    let classified = classify_all(diff_with_hints(&old_layout, &new_layout, hints));
+    (classified, old_layout, new_layout)
+}
+
+fn run_zc_pipeline(
+    old: &PathBuf,
+    new: &PathBuf,
+    account: &str,
+    hints: &[RenameHint],
+) -> (Vec<ClassifiedChange>, Layout, Layout) {
+    let old_def = parse_account(old, account);
+    let new_def = parse_account(new, account);
     let old_zc = compute_zc_layout(&old_def).unwrap_or_else(|e| {
-        eprintln!("zero-copy layout error (old IDL): {e}");
+        eprintln!("zero-copy layout error (old): {e}");
         std::process::exit(1);
     });
     let new_zc = compute_zc_layout(&new_def).unwrap_or_else(|e| {
-        eprintln!("zero-copy layout error (new IDL): {e}");
+        eprintln!("zero-copy layout error (new): {e}");
         std::process::exit(1);
     });
-    let changes = diff(&zc_to_borsh_layout(&old_zc), &zc_to_borsh_layout(&new_zc));
-    classify_zc_all(changes, &old_zc, &new_zc)
+    let changes = diff_with_hints(&zc_to_borsh_layout(&old_zc), &zc_to_borsh_layout(&new_zc), hints);
+    let classified = classify_zc_all(changes, &old_zc, &new_zc);
+    let old_layout = zc_to_borsh_layout(&old_zc);
+    let new_layout = zc_to_borsh_layout(&new_zc);
+    (classified, old_layout, new_layout)
 }
 
 // ── diff command ──────────────────────────────────────────────────────────────
 
-fn cmd_diff(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool) {
-    let classified = if zero_copy {
-        run_zc_pipeline(old, new, account)
+fn cmd_diff(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool, hints: &[RenameHint]) {
+    let (classified, _, _) = if zero_copy {
+        run_zc_pipeline(old, new, account, hints)
     } else {
-        run_pipeline(old, new, account)
+        run_pipeline(old, new, account, hints)
     };
 
     let mode = if zero_copy { "zero-copy" } else { "borsh" };
@@ -153,11 +195,11 @@ fn safety_str(s: &Safety) -> &'static str {
 
 // ── gen command ───────────────────────────────────────────────────────────────
 
-fn cmd_gen(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool) {
-    let classified = if zero_copy {
-        run_zc_pipeline(old, new, account)
+fn cmd_gen(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool, hints: &[RenameHint]) {
+    let (classified, old_layout, new_layout) = if zero_copy {
+        run_zc_pipeline(old, new, account, hints)
     } else {
-        run_pipeline(old, new, account)
+        run_pipeline(old, new, account, hints)
     };
 
     let has_danger = classified.iter().any(|c| c.safety == Safety::Danger);
@@ -167,6 +209,7 @@ fn cmd_gen(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool) {
     if has_danger {
         println!("// WARNING: dangerous changes present — resolve every DANGER line before shipping");
     }
+    emit_size_comment(&old_layout, &new_layout, account);
     println!();
     println!("impl Migration<Old{account}, {account}> {{");
     println!("    pub fn migrate(old: Old{account}) -> {account} {{");
@@ -247,11 +290,12 @@ fn cmd_check(
     sarif_out: Option<&PathBuf>,
     zero_copy: bool,
     ack_path: Option<&PathBuf>,
+    hints: &[RenameHint],
 ) {
-    let classified = if zero_copy {
-        run_zc_pipeline(old, new, account)
+    let (classified, _, _) = if zero_copy {
+        run_zc_pipeline(old, new, account, hints)
     } else {
-        run_pipeline(old, new, account)
+        run_pipeline(old, new, account, hints)
     };
 
     // Load acknowledgements if provided.
@@ -347,6 +391,44 @@ fn cmd_check(
     std::process::exit(1);
 }
 
+// ── size / rent helpers ───────────────────────────────────────────────────────
+
+fn emit_size_comment(old: &Layout, new: &Layout, account: &str) {
+    let account_snake = to_snake(account);
+    match (&old.total_size, &new.total_size) {
+        (Size::Fixed(o), Size::Fixed(n)) => {
+            if n > o {
+                println!("// Size: {o} → {n} bytes (+{delta} bytes)", delta = n - o);
+                println!("// Anchor's Migration<T> container handles realloc automatically.");
+                println!("// Manual instruction (add before Ok(())):");
+                println!("//   ctx.accounts.{account_snake}.to_account_info().realloc({n}, false)?;");
+            } else if n < o {
+                println!("// Size: {o} → {n} bytes (-{delta} bytes, account shrinks)", delta = o - n);
+                println!("// Manual instruction (add before Ok(())):");
+                println!("//   ctx.accounts.{account_snake}.to_account_info().realloc({n}, false)?;");
+            }
+            // unchanged size → no comment needed
+        }
+        _ => {
+            println!("// Size: variable (account contains String/Vec fields).");
+            println!("// Compute runtime size and add before Ok(()):");
+            println!("//   let new_size = <compute>;");
+            println!("//   ctx.accounts.{account_snake}.to_account_info().realloc(new_size, false)?;");
+        }
+    }
+}
+
+fn to_snake(s: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in s.chars().enumerate() {
+        if c.is_uppercase() && i > 0 {
+            out.push('_');
+        }
+        out.extend(c.to_lowercase());
+    }
+    out
+}
+
 // ── type name helper ──────────────────────────────────────────────────────────
 
 fn type_name(ty: &FieldType) -> String {
@@ -379,10 +461,17 @@ fn type_name(ty: &FieldType) -> String {
 fn main() {
     let cli = Cli::parse();
     match &cli.command {
-        Command::Diff  { old, new, account, zero_copy }        => cmd_diff(old, new, account, *zero_copy),
-        Command::Gen   { old, new, account, zero_copy }        => cmd_gen(old, new, account, *zero_copy),
-        Command::Check { old, new, account, sarif, zero_copy, ack } => {
-            cmd_check(old, new, account, sarif.as_ref(), *zero_copy, ack.as_ref())
+        Command::Diff { old, new, account, zero_copy, hints } => {
+            let hint_list = load_hints_or_exit(hints);
+            cmd_diff(old, new, account, *zero_copy, &hint_list);
+        }
+        Command::Gen { old, new, account, zero_copy, hints } => {
+            let hint_list = load_hints_or_exit(hints);
+            cmd_gen(old, new, account, *zero_copy, &hint_list);
+        }
+        Command::Check { old, new, account, sarif, zero_copy, ack, hints } => {
+            let hint_list = load_hints_or_exit(hints);
+            cmd_check(old, new, account, sarif.as_ref(), *zero_copy, ack.as_ref(), &hint_list);
         }
     }
 }

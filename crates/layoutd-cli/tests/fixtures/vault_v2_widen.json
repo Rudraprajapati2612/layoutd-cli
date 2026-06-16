@@ -1,0 +1,15 @@
+{
+  "types": [
+    {
+      "name": "Vault",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          { "name": "owner",   "type": "pubkey" },
+          { "name": "balance", "type": "u128"   },
+          { "name": "bump",    "type": "u8"     }
+        ]
+      }
+    }
+  ]
+}
