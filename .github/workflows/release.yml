@@ -23,7 +23,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             artifact: layoutd-linux-aarch64
             cross: true
-          - os: macos-latest
+          - os: macos-13
             target: x86_64-apple-darwin
             artifact: layoutd-macos-x86_64
           - os: macos-latest
@@ -51,11 +51,11 @@ jobs:
 
       - name: Build with cross
         if: matrix.cross
-        run: cross build --release --target ${{ matrix.target }} -p layoutd-cli
+        run: cross build --release --target ${{ matrix.target }} -p layoutd
 
       - name: Build native
         if: '!matrix.cross'
-        run: cargo build --release --target ${{ matrix.target }} -p layoutd-cli
+        run: cargo build --release --target ${{ matrix.target }} -p layoutd
 
       - name: Stage binary (Unix)
         if: runner.os != 'Windows'
@@ -101,7 +101,6 @@ jobs:
         run: |
           TAG="${GITHUB_REF_NAME}"
           VERSION="${TAG#v}"
-          # Pull lines between this version header and the next '## ' header
           NOTES=$(awk "/^## \[?${VERSION}\]?/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md 2>/dev/null || echo "")
           if [ -z "$NOTES" ]; then
             NOTES="Release ${TAG}"
@@ -118,6 +117,7 @@ jobs:
           body: ${{ steps.changelog.outputs.notes }}
           draft: false
           prerelease: ${{ contains(github.ref_name, '-') }}
+          token: ${{ secrets.GITHUB_TOKEN }}
           files: |
             dist/**/*
             checksums.txt
