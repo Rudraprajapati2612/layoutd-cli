@@ -23,7 +23,7 @@ jobs:
             target: aarch64-unknown-linux-musl
             artifact: layoutd-linux-aarch64
             cross: true
-          - os: macos-13
+          - os: macos-latest
             target: x86_64-apple-darwin
             artifact: layoutd-macos-x86_64
           - os: macos-latest
