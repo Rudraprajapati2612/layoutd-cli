@@ -125,10 +125,11 @@ fn market_diffed_with_itself_is_all_unchanged() {
     assert!(classified.iter().all(|c| matches!(c.change.kind, ChangeKind::Unchanged)));
 }
 
-// ─── Pipeline: field added at end → Safe ─────────────────────────────────────
+// ─── Pipeline: field added at end of exact-sized account → Danger ───────────
 
 #[test]
-fn add_field_at_end_of_escrow_vault_is_safe() {
+fn add_field_at_end_of_escrow_vault_is_danger() {
+    // EscrowVault is fixed-size (227 bytes). Old accounts have no bytes for "version".
     let old_def = escrow_vault();
     let mut new_fields = old_def.fields.clone();
     let idx = new_fields.len();
@@ -141,12 +142,14 @@ fn add_field_at_end_of_escrow_vault_is_safe() {
     ));
 
     let added = classified.iter().find(|c| c.change.name == "version").unwrap();
-    assert_eq!(added.safety, Safety::Safe);
+    assert_eq!(added.safety, Safety::Danger);
     assert!(matches!(added.change.kind, ChangeKind::Added { .. }));
 }
 
 #[test]
-fn add_two_fields_at_end_both_safe() {
+fn add_two_fields_at_end_both_danger_for_exact_sized_account() {
+    // Old is fixed-size: authority(32) + balance(8) = exact allocation.
+    // Neither fee_bps nor bump have bytes in old accounts → both DANGER.
     let old = make_account("Vault", vec![
         ("authority", FieldType::Pubkey),
         ("balance",   FieldType::U64),
@@ -162,10 +165,8 @@ fn add_two_fields_at_end_both_safe() {
     let added: Vec<_> = classified.iter()
         .filter(|c| matches!(c.change.kind, ChangeKind::Added { .. }))
         .collect();
-    // Only the last added field is truly at the end; earlier new fields are mid-adds.
-    // With two adds: fee_bps at index 2, bump at index 3 (max). fee_bps is mid, bump is end.
-    assert!(added.iter().any(|c| c.change.name == "bump" && c.safety == Safety::Safe));
-    assert!(added.iter().any(|c| c.change.name == "fee_bps" && c.safety == Safety::Review));
+    assert!(added.iter().any(|c| c.change.name == "bump" && c.safety == Safety::Danger));
+    assert!(added.iter().any(|c| c.change.name == "fee_bps" && c.safety == Safety::Danger));
 }
 
 // ─── Pipeline: field added in middle → Review ────────────────────────────────
@@ -250,12 +251,12 @@ fn widen_u64_to_u128_in_escrow_vault_is_review() {
     ));
 
     let changed = classified.iter().find(|c| c.change.name == "total_locked_collateral").unwrap();
-    assert_eq!(changed.safety, Safety::Review);
+    assert_eq!(changed.safety, Safety::Danger);
     assert!(matches!(changed.change.kind, ChangeKind::TypeChanged { .. }));
 }
 
 #[test]
-fn widen_u32_to_u64_is_review() {
+fn widen_u32_to_u64_is_danger() {
     let old = make_account("Vault", vec![
         ("owner",   FieldType::Pubkey),
         ("balance", FieldType::U32),
@@ -269,7 +270,7 @@ fn widen_u32_to_u64_is_review() {
 
     let classified = classify_all(diff(&compute_layout(&old), &compute_layout(&new)));
     let changed = classified.iter().find(|c| c.change.name == "balance").unwrap();
-    assert_eq!(changed.safety, Safety::Review);
+    assert_eq!(changed.safety, Safety::Danger);
 }
 
 // ─── Pipeline: sign flip → Danger ────────────────────────────────────────────
@@ -345,10 +346,10 @@ fn rename_with_type_change_is_not_a_rename() {
     assert!(classified.iter().any(|c| c.change.name == "balance" && matches!(c.change.kind, ChangeKind::Added { .. })));
 }
 
-// ─── Pipeline: reorder → Safe (Borsh) ────────────────────────────────────────
+// ─── Pipeline: reorder → Danger (Borsh is positional) ───────────────────────
 
 #[test]
-fn reorder_fields_is_safe_for_borsh() {
+fn reorder_fields_is_danger_for_borsh() {
     let old = make_account("Vault", vec![
         ("authority", FieldType::Pubkey),
         ("bump",      FieldType::U8),
@@ -356,7 +357,7 @@ fn reorder_fields_is_safe_for_borsh() {
     ]);
     let new = make_account("Vault", vec![
         ("authority", FieldType::Pubkey),
-        ("balance",   FieldType::U64), // moved up
+        ("balance",   FieldType::U64), // moved up — Borsh byte position changes
         ("bump",      FieldType::U8),
     ]);
 
@@ -365,13 +366,13 @@ fn reorder_fields_is_safe_for_borsh() {
         .filter(|c| matches!(c.change.kind, ChangeKind::Reordered { .. }))
         .collect();
     assert!(!reordered.is_empty(), "expected reordered fields");
-    assert!(reordered.iter().all(|c| c.safety == Safety::Safe));
+    assert!(reordered.iter().all(|c| c.safety == Safety::Danger));
 }
 
 // ─── Pipeline: TypeChangedAndReordered ───────────────────────────────────────
 
 #[test]
-fn type_changed_and_reordered_widen_is_review() {
+fn type_changed_and_reordered_widen_is_danger() {
     let old = make_account("Vault", vec![
         ("authority", FieldType::Pubkey),
         ("count",     FieldType::U32),
@@ -386,7 +387,7 @@ fn type_changed_and_reordered_widen_is_review() {
     let classified = classify_all(diff(&compute_layout(&old), &compute_layout(&new)));
     let changed = classified.iter().find(|c| c.change.name == "count").unwrap();
     assert!(matches!(changed.change.kind, ChangeKind::TypeChangedAndReordered { .. }));
-    assert_eq!(changed.safety, Safety::Review);
+    assert_eq!(changed.safety, Safety::Danger);
 }
 
 #[test]
@@ -430,10 +431,10 @@ fn mixed_changes_produce_correct_per_field_verdicts() {
     let by: HashMap<&str, _> = classified.iter().map(|c| (c.change.name.as_str(), c)).collect();
 
     assert_eq!(by["creator"].safety,    Safety::Safe,   "creator should be unchanged/safe");
-    assert_eq!(by["balance"].safety,    Safety::Review, "balance widen should be Review");
+    assert_eq!(by["balance"].safety,    Safety::Danger, "balance widen should be Danger — byte layout expands");
     assert_eq!(by["is_open"].safety,    Safety::Danger, "removed field should be Danger");
-    assert_eq!(by["bump"].safety,       Safety::Safe,   "reordered Borsh field should be Safe");
-    assert_eq!(by["created_at"].safety, Safety::Safe,   "field added at end should be Safe");
+    assert_eq!(by["bump"].safety,       Safety::Danger, "reordered Borsh field should be Danger — Borsh is positional");
+    assert_eq!(by["created_at"].safety, Safety::Danger, "field appended to exact-sized account — old accounts lack bytes, realloc required");
 }
 
 // ─── Pipeline: EscrowVault from real IDL — full run ──────────────────────────
@@ -457,9 +458,9 @@ fn full_pipeline_escrow_vault_v2_with_audit_log_field() {
         .collect();
     assert!(existing.iter().all(|c| c.safety == Safety::Safe && matches!(c.change.kind, ChangeKind::Unchanged)));
 
-    // New field at end → Safe
+    // EscrowVault is exact-sized (227 bytes); audit_log has no bytes in old accounts → DANGER.
     let new_f = classified.iter().find(|c| c.change.name == "audit_log").unwrap();
-    assert_eq!(new_f.safety, Safety::Safe);
+    assert_eq!(new_f.safety, Safety::Danger);
     assert!(matches!(new_f.change.kind, ChangeKind::Added { .. }));
 }
 
@@ -482,8 +483,14 @@ fn full_pipeline_escrow_vault_dangerous_mid_removal() {
 
     let removed = classified.iter().find(|c| c.change.name == "total_yes_minted").unwrap();
     assert_eq!(removed.safety, Safety::Danger);
-    // Fields before the removal are Unchanged; fields after are Reordered (indices shifted).
-    // All surviving fields are Safe either way.
-    let others: Vec<_> = classified.iter().filter(|c| c.change.name != "total_yes_minted").collect();
-    assert!(others.iter().all(|c| c.safety == Safety::Safe));
+    // Fields before the removal are Unchanged (Safe); fields after shift index → Reordered (Danger).
+    let unchanged: Vec<_> = classified.iter()
+        .filter(|c| c.change.name != "total_yes_minted" && matches!(c.change.kind, ChangeKind::Unchanged))
+        .collect();
+    assert!(unchanged.iter().all(|c| c.safety == Safety::Safe));
+    let reordered: Vec<_> = classified.iter()
+        .filter(|c| c.change.name != "total_yes_minted" && matches!(c.change.kind, ChangeKind::Reordered { .. }))
+        .collect();
+    assert!(!reordered.is_empty(), "fields after removal should be reordered");
+    assert!(reordered.iter().all(|c| c.safety == Safety::Danger));
 }

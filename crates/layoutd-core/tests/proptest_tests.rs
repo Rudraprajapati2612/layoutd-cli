@@ -86,10 +86,12 @@ proptest! {
         );
     }
 
-    /// Adding one field at the end is always Safe in Borsh.
+    /// Appending a field to a fixed-size Borsh account is always Danger.
+    /// Old accounts have exactly as many bytes as the old struct defined; the new field
+    /// has no bytes in existing accounts — deserialization hits end-of-buffer.
     #[test]
-    fn prop_add_at_end_is_always_safe(
-        base in arb_any_account(),
+    fn prop_add_at_end_fixed_account_is_always_danger(
+        base in arb_fixed_account(),
         new_ty in arb_any_type(),
     ) {
         let n = base.fields.len();
@@ -99,8 +101,8 @@ proptest! {
         let cs = classify_all(diff(&compute_layout(&base), &compute_layout(&new_def)));
         let added = cs.iter().find(|c| c.change.name == "appended").expect("added field not in diff");
         prop_assert_eq!(
-            added.safety, Safety::Safe,
-            "add-at-end should be Safe; reason: {}", added.reason
+            added.safety, Safety::Danger,
+            "add-at-end to exact-sized account should be Danger; reason: {}", added.reason
         );
     }
 
@@ -147,9 +149,9 @@ proptest! {
         );
     }
 
-    /// Reordering fields is always Safe in Borsh (serialization matches by name).
+    /// Reordering fields is always Danger in Borsh — Borsh is positional, not name-based.
     #[test]
-    fn prop_borsh_reorder_is_always_safe(
+    fn prop_borsh_reorder_is_always_danger(
         base in arb_any_account().prop_filter("need ≥2 fields", |d| d.fields.len() >= 2),
     ) {
         // Reverse field order → maximum reordering.
@@ -158,12 +160,12 @@ proptest! {
         for (i, f) in new_def.fields.iter_mut().enumerate() { f.index = i; }
 
         let cs = classify_all(diff(&compute_layout(&base), &compute_layout(&new_def)));
-        let non_safe_reorders: Vec<_> = cs.iter()
-            .filter(|c| matches!(c.change.kind, ChangeKind::Reordered { .. }) && c.safety != Safety::Safe)
+        let non_danger_reorders: Vec<_> = cs.iter()
+            .filter(|c| matches!(c.change.kind, ChangeKind::Reordered { .. }) && c.safety != Safety::Danger)
             .collect();
         prop_assert!(
-            non_safe_reorders.is_empty(),
-            "Borsh reorder should always be Safe; non-safe: {:?}", non_safe_reorders
+            non_danger_reorders.is_empty(),
+            "Borsh reorder should always be Danger; non-danger: {:?}", non_danger_reorders
         );
     }
 
@@ -357,10 +359,11 @@ proptest! {
         );
     }
 
-    /// Borsh and ZC agree on Safe verdict for add-at-end.
-    /// (Both classify adding at end as Safe — they only disagree on reorder / mid-insert.)
+    /// Borsh and ZC diverge on add-at-end for exact-sized fixed accounts.
+    /// Borsh: Danger — old accounts have no bytes for the new field; hits end-of-buffer.
+    /// ZC:    Safe   — ZC does not apply the byte-existence check (its semantics differ).
     #[test]
-    fn prop_borsh_and_zc_agree_on_add_at_end(
+    fn prop_borsh_danger_zc_safe_for_add_at_end_to_fixed_account(
         base in arb_fixed_account(),
         new_ty in arb_fixed_type(),
     ) {
@@ -368,11 +371,12 @@ proptest! {
         let mut new_def = base.clone();
         new_def.fields.push(FieldDef { name: "appended".to_string(), ty: new_ty, index: n });
 
-        // Borsh
+        // Borsh: exact-sized old account → no bytes for new field → Danger
         let borsh_cs = classify_all(diff(&compute_layout(&base), &compute_layout(&new_def)));
         let borsh_added = borsh_cs.iter().find(|c| c.change.name == "appended").unwrap();
+        prop_assert_eq!(borsh_added.safety, Safety::Danger);
 
-        // ZC
+        // ZC: end-append does not shift existing field offsets → Safe
         let old_zc = compute_zc_layout(&base).unwrap();
         let new_zc = compute_zc_layout(&new_def).unwrap();
         let zc_cs = classify_zc_all(
@@ -381,8 +385,6 @@ proptest! {
             &new_zc,
         );
         let zc_added = zc_cs.iter().find(|c| c.change.name == "appended").unwrap();
-
-        prop_assert_eq!(borsh_added.safety, Safety::Safe);
         prop_assert_eq!(zc_added.safety, Safety::Safe);
     }
 }

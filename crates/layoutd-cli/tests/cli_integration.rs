@@ -57,7 +57,10 @@ fn diff_prints_field_names_and_safety_tags() {
         .clone();
     let stdout = String::from_utf8(out).unwrap();
     assert!(stdout.contains("version"), "should mention the new field");
-    assert!(stdout.contains("SAFE"),    "should print SAFE tag");
+    // Existing unchanged fields (owner, balance, bump) are SAFE.
+    assert!(stdout.contains("SAFE"),   "should print SAFE for unchanged fields");
+    // The appended field (version) is DANGER: old accounts have no bytes for it.
+    assert!(stdout.contains("DANGER"), "should print DANGER for appended field to exact-sized account");
 }
 
 #[test]
@@ -88,7 +91,7 @@ fn diff_shows_review_for_widen() {
         .stdout
         .clone();
     let stdout = String::from_utf8(out).unwrap();
-    assert!(stdout.contains("REVIEW"), "widen should produce REVIEW");
+    assert!(stdout.contains("DANGER"), "widen should produce DANGER — byte layout expands");
 }
 
 #[test]
@@ -106,7 +109,8 @@ fn diff_with_source_rs_file_exits_0() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn gen_exits_0_for_safe_changes() {
+fn gen_always_exits_0() {
+    // gen is code-generation only — it always exits 0 regardless of safety level.
     layoutd()
         .args(["gen", fixture("vault_v1.json").to_str().unwrap(),
                       fixture("vault_v2_safe.json").to_str().unwrap(),
@@ -170,13 +174,16 @@ fn gen_emits_danger_warning_for_removed_field() {
 // ══════════════════════════════════════════════════════════════════════════════
 
 #[test]
-fn check_safe_change_exits_0() {
+fn check_appended_field_to_fixed_account_exits_1() {
+    // vault_v2_safe.json adds version:u8 at the end of a fixed-size Vault.
+    // Old accounts have no bytes for it — Borsh hits end-of-buffer. Must exit 1.
     layoutd()
         .args(["check", fixture("vault_v1.json").to_str().unwrap(),
                         fixture("vault_v2_safe.json").to_str().unwrap(),
                "--account", "Vault"])
         .assert()
-        .success();
+        .failure()
+        .code(1);
 }
 
 #[test]
@@ -201,14 +208,15 @@ fn check_danger_exits_1() {
 }
 
 #[test]
-fn check_review_alone_exits_0() {
-    // A widen (Review) should NOT fail CI by default.
+fn check_widen_exits_1() {
+    // A widen is now DANGER (byte size changes) — CI must fail.
     layoutd()
         .args(["check", fixture("vault_v1.json").to_str().unwrap(),
                         fixture("vault_v2_widen.json").to_str().unwrap(),
                "--account", "Vault"])
         .assert()
-        .success();
+        .failure()
+        .code(1);
 }
 
 #[test]
@@ -338,9 +346,12 @@ fn check_sarif_written_even_when_safe() {
 
 #[test]
 fn check_ack_named_danger_exits_0() {
+    // vault_v2_danger removes 'balance', which shifts 'bump' from index 2→1 (reordered).
+    // Both changes are DANGER and must be acknowledged.
     let ack = write_temp(r#"{
         "acknowledged": [
-            { "account": "Vault", "field": "balance", "change": "removed", "note": "intentional" }
+            { "account": "Vault", "field": "balance", "change": "removed",   "note": "intentional" },
+            { "account": "Vault", "field": "bump",    "change": "reordered", "note": "side-effect of balance removal" }
         ]
     }"#);
     layoutd()
@@ -432,14 +443,21 @@ fn check_with_hints_file_exits_0_for_hinted_rename() {
         .code(1);
 
     // With hint: balance→collateral is forced regardless of index change → Renamed (Safe).
+    // bump moved from index 2→1 (reordered = Danger), so also ack that.
     let hints = write_temp(r#"{
         "renames": [{ "account": "Vault", "from": "balance", "to": "collateral" }]
+    }"#);
+    let ack = write_temp(r#"{
+        "acknowledged": [
+            { "account": "Vault", "field": "bump", "change": "reordered", "note": "side-effect of swap" }
+        ]
     }"#);
     layoutd()
         .args(["check", fixture("vault_v1.json").to_str().unwrap(),
                         v2_swapped.path().to_str().unwrap(),
                "--account", "Vault",
-               "--hints", hints.path().to_str().unwrap()])
+               "--hints", hints.path().to_str().unwrap(),
+               "--ack",   ack.path().to_str().unwrap()])
         .assert()
         .success();
 }

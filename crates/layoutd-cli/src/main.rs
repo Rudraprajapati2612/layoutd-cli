@@ -228,8 +228,12 @@ fn cmd_gen(old: &PathBuf, new: &PathBuf, account: &str, zero_copy: bool, hints: 
 
 fn gen_field_line(field: &str, kind: &ChangeKind, safety: &Safety, reason: &str) -> String {
     match kind {
-        ChangeKind::Unchanged | ChangeKind::Reordered { .. } => {
+        ChangeKind::Unchanged => {
             format!("            {field}: old.{field},")
+        }
+
+        ChangeKind::Reordered { .. } => {
+            format!("            // DANGER: {field} — {reason}\n            {field}: old.{field},")
         }
 
         ChangeKind::Renamed { from_name } => {

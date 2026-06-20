@@ -1,3 +1,4 @@
+use crate::borsh::{Offset, Size};
 use crate::diff::{ChangeKind, FieldChange};
 use crate::idl::FieldType;
 
@@ -16,31 +17,56 @@ pub struct ClassifiedChange {
 }
 
 /// Primary API: classify a full change list from the diff engine.
-/// Determines position context (is a field truly at the end?) from the list itself.
 pub fn classify_all(changes: Vec<FieldChange>) -> Vec<ClassifiedChange> {
-    let max_new_index = changes
+    // Use the highest new-layout index among fields that survived from the old struct.
+    // Removed fields have no new_layout; purely new (Added) fields have no old_layout.
+    // This correctly handles removal + reorder combos where max old_index would be misleading.
+    let max_old_in_new = changes
         .iter()
+        .filter(|c| c.old_layout.is_some() && c.new_layout.is_some())
         .filter_map(|c| c.new_layout.as_ref())
         .map(|fl| fl.index)
-        .max()
-        .unwrap_or(0);
+        .max();
 
-    changes.into_iter().map(|c| classify_one(c, max_new_index)).collect()
+    // If every old field has a fixed offset and fixed size, the old account is exact-sized.
+    // Appending to an exact-sized account is DANGER: old accounts have no bytes for the new field.
+    let old_is_fixed = changes
+        .iter()
+        .filter_map(|c| c.old_layout.as_ref())
+        .all(|fl| matches!(fl.offset, Offset::Fixed(_)) && matches!(fl.size, Size::Fixed(_)));
+
+    changes.into_iter().map(|c| classify_one(c, max_old_in_new, old_is_fixed)).collect()
 }
 
-/// Classify a single change. `max_new_index` is the highest field index in the new layout,
-/// used to decide whether an Added field is at the end (Safe) or in the middle (Review).
-pub fn classify_one(change: FieldChange, max_new_index: usize) -> ClassifiedChange {
+/// Classify a single change.
+/// `max_old_index` — highest new-layout index among surviving old fields (for append detection).
+/// `old_is_fixed`  — true when every old field has a fixed offset+size (exact-sized account).
+pub fn classify_one(
+    change: FieldChange,
+    max_old_index: Option<usize>,
+    old_is_fixed: bool,
+) -> ClassifiedChange {
     let (safety, reason) = match &change.kind {
         ChangeKind::Unchanged => (Safety::Safe, "field unchanged"),
 
         ChangeKind::Added { at_index } => {
-            if *at_index >= max_new_index {
-                (Safety::Safe, "field added at end — no existing offsets shift")
+            let is_appended = max_old_index.map_or(true, |max| *at_index > max);
+            if is_appended {
+                if old_is_fixed {
+                    (
+                        Safety::Danger,
+                        "field appended — old accounts are exact-sized and lack bytes for this field; realloc required before deserialization",
+                    )
+                } else {
+                    (
+                        Safety::Review,
+                        "field appended — old accounts may lack bytes; verify realloc",
+                    )
+                }
             } else {
                 (
                     Safety::Review,
-                    "field added in middle — safe for Borsh but verify alignment for zero-copy",
+                    "field inserted in existing layout — existing accounts need migration",
                 )
             }
         }
@@ -51,8 +77,8 @@ pub fn classify_one(change: FieldChange, max_new_index: usize) -> ClassifiedChan
         ),
 
         ChangeKind::Reordered { .. } => (
-            Safety::Safe,
-            "field reordered — safe for Borsh, serialization matches by name",
+            Safety::Danger,
+            "field reordered — Borsh is positional, existing accounts will deserialize incorrectly",
         ),
 
         // Rename was confirmed by diff engine (same index + same type): value carries over intact.
@@ -74,18 +100,18 @@ pub fn classify_one(change: FieldChange, max_new_index: usize) -> ClassifiedChan
 }
 
 fn classify_type_change(old_ty: &FieldType, new_ty: &FieldType) -> (Safety, &'static str) {
-    // Float widen is value-preserving but gets its own message.
+    // Float widen changes byte size (4→8) — existing accounts need migration.
     if matches!((old_ty, new_ty), (FieldType::F32, FieldType::F64)) {
         return (
-            Safety::Review,
-            "float widen f32→f64 — value preserved, verify all producers and consumers updated",
+            Safety::Danger,
+            "float widen f32→f64 — byte size doubles, existing accounts require migration",
         );
     }
 
     if is_safe_widen(old_ty, new_ty) {
         return (
-            Safety::Review,
-            "integer widen — value fits in larger type, verify no signedness assumption",
+            Safety::Danger,
+            "integer widen — byte size expands, existing accounts require migration before use",
         );
     }
 

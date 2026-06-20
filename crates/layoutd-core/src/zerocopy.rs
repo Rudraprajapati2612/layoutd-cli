@@ -670,7 +670,7 @@ mod tests {
     // ── Borsh vs ZC contrast ──────────────────────────────────────────────────
 
     #[test]
-    fn borsh_reorder_safe_but_zc_reorder_danger() {
+    fn borsh_and_zc_both_danger_for_reorder() {
         use crate::borsh::compute_layout;
         use crate::classify::classify_all;
         use crate::idl::FieldDef;
@@ -692,7 +692,7 @@ mod tests {
             ],
         };
 
-        // Borsh: reorder is Safe
+        // Borsh: reorder is Danger (Borsh is positional — byte offsets shift)
         let borsh_changes =
             classify_all(diff(&compute_layout(&old_def), &compute_layout(&new_def)));
         let reordered_borsh: Vec<_> = borsh_changes
@@ -700,9 +700,9 @@ mod tests {
             .filter(|c| matches!(c.change.kind, ChangeKind::Reordered { .. }))
             .collect();
         assert!(!reordered_borsh.is_empty());
-        assert!(reordered_borsh.iter().all(|c| c.safety == Safety::Safe));
+        assert!(reordered_borsh.iter().all(|c| c.safety == Safety::Danger));
 
-        // ZC: same reorder is Danger
+        // ZC: same reorder is also Danger
         let old_zc = compute_zc_layout(&old_def).unwrap();
         let new_zc = compute_zc_layout(&new_def).unwrap();
         let zc_changes = classify_zc_all(

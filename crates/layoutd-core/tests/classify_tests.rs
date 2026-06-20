@@ -23,33 +23,41 @@ fn change(name: &str, kind: ChangeKind, old: Option<FieldLayout>, new: Option<Fi
 fn unchanged_is_safe() {
     let layout = fl("owner", FieldType::Pubkey, 0);
     let c = change("owner", ChangeKind::Unchanged, Some(layout.clone()), Some(layout));
-    assert_eq!(classify_one(c, 0).safety, Safety::Safe);
+    assert_eq!(classify_one(c, Some(0), false).safety, Safety::Safe);
 }
 
 // ─── Added ────────────────────────────────────────────────────────────────────
 
 #[test]
-fn added_at_end_is_safe() {
-    // at_index == max_new_index → end-add
+fn added_at_end_is_danger_for_exact_sized_account() {
+    // Old account is fixed-size: new field appended has no bytes in existing accounts.
     let layout = fl("version", FieldType::U8, 3);
     let c = change("version", ChangeKind::Added { at_index: 3 }, None, Some(layout));
-    assert_eq!(classify_one(c, 3).safety, Safety::Safe);
+    assert_eq!(classify_one(c, Some(2), true).safety, Safety::Danger);
+}
+
+#[test]
+fn added_at_end_is_review_for_variable_account() {
+    // Old account has variable-size fields: can't determine statically whether bytes exist.
+    let layout = fl("version", FieldType::U8, 3);
+    let c = change("version", ChangeKind::Added { at_index: 3 }, None, Some(layout));
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Review);
 }
 
 #[test]
 fn added_in_middle_is_review() {
-    // at_index < max_new_index → mid-add
+    // at_index 1 is NOT > max_old_index 2 → inserted before an existing field
     let layout = fl("fee_rate", FieldType::U16, 1);
     let c = change("fee_rate", ChangeKind::Added { at_index: 1 }, None, Some(layout));
-    assert_eq!(classify_one(c, 3).safety, Safety::Review);
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Review);
 }
 
 #[test]
-fn added_as_only_field_is_safe() {
-    // Single new field: at_index == 0 == max_new_index
+fn added_as_only_field_is_danger_for_exact_sized_account() {
+    // No old fields → old account only has discriminator bytes; any new field needs realloc.
     let layout = fl("bump", FieldType::U8, 0);
     let c = change("bump", ChangeKind::Added { at_index: 0 }, None, Some(layout));
-    assert_eq!(classify_one(c, 0).safety, Safety::Safe);
+    assert_eq!(classify_one(c, None, true).safety, Safety::Danger);
 }
 
 // ─── Removed ──────────────────────────────────────────────────────────────────
@@ -58,24 +66,24 @@ fn added_as_only_field_is_safe() {
 fn removed_is_danger() {
     let layout = fl("bump", FieldType::U8, 2);
     let c = change("bump", ChangeKind::Removed { from_index: 2 }, Some(layout), None);
-    assert_eq!(classify_one(c, 1).safety, Safety::Danger);
+    assert_eq!(classify_one(c, Some(1), false).safety, Safety::Danger);
 }
 
 #[test]
 fn removed_middle_field_is_danger() {
     let layout = fl("fee_bps", FieldType::U16, 1);
     let c = change("fee_bps", ChangeKind::Removed { from_index: 1 }, Some(layout), None);
-    assert_eq!(classify_one(c, 3).safety, Safety::Danger);
+    assert_eq!(classify_one(c, Some(3), false).safety, Safety::Danger);
 }
 
 // ─── Reordered ────────────────────────────────────────────────────────────────
 
 #[test]
-fn reordered_is_safe_for_borsh() {
+fn reordered_is_danger_for_borsh() {
     let old = fl("bump", FieldType::U8, 1);
     let new = fl("bump", FieldType::U8, 2);
     let c = change("bump", ChangeKind::Reordered { old_index: 1, new_index: 2 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 2).safety, Safety::Safe);
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Danger);
 }
 
 // ─── Renamed ──────────────────────────────────────────────────────────────────
@@ -90,49 +98,49 @@ fn renamed_is_safe() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 2).safety, Safety::Safe);
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Safe);
 }
 
-// ─── TypeChanged — widening (Review) ─────────────────────────────────────────
+// ─── TypeChanged — widening (Danger — byte size expands, layout breaks) ──────
 
 #[test]
-fn widen_u8_to_u16_is_review() {
+fn widen_u8_to_u16_is_danger() {
     let old = fl("val", FieldType::U8, 0);
     let new = fl("val", FieldType::U16, 0);
     let c = change("val", ChangeKind::TypeChanged { old_type: FieldType::U8, new_type: FieldType::U16 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Review);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
-fn widen_u32_to_u64_is_review() {
+fn widen_u32_to_u64_is_danger() {
     let old = fl("balance", FieldType::U32, 0);
     let new = fl("balance", FieldType::U64, 0);
     let c = change("balance", ChangeKind::TypeChanged { old_type: FieldType::U32, new_type: FieldType::U64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Review);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
-fn widen_u64_to_u128_is_review() {
+fn widen_u64_to_u128_is_danger() {
     let old = fl("supply", FieldType::U64, 0);
     let new = fl("supply", FieldType::U128, 0);
     let c = change("supply", ChangeKind::TypeChanged { old_type: FieldType::U64, new_type: FieldType::U128 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Review);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
-fn widen_i32_to_i64_is_review() {
+fn widen_i32_to_i64_is_danger() {
     let old = fl("delta", FieldType::I32, 0);
     let new = fl("delta", FieldType::I64, 0);
     let c = change("delta", ChangeKind::TypeChanged { old_type: FieldType::I32, new_type: FieldType::I64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Review);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
-fn widen_f32_to_f64_is_review() {
+fn widen_f32_to_f64_is_danger() {
     let old = fl("price", FieldType::F32, 0);
     let new = fl("price", FieldType::F64, 0);
     let c = change("price", ChangeKind::TypeChanged { old_type: FieldType::F32, new_type: FieldType::F64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Review);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — narrowing (Danger) ────────────────────────────────────────
@@ -142,7 +150,7 @@ fn narrow_u64_to_u32_is_danger() {
     let old = fl("balance", FieldType::U64, 0);
     let new = fl("balance", FieldType::U32, 0);
     let c = change("balance", ChangeKind::TypeChanged { old_type: FieldType::U64, new_type: FieldType::U32 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -150,7 +158,7 @@ fn narrow_u128_to_u8_is_danger() {
     let old = fl("val", FieldType::U128, 0);
     let new = fl("val", FieldType::U8, 0);
     let c = change("val", ChangeKind::TypeChanged { old_type: FieldType::U128, new_type: FieldType::U8 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -158,7 +166,7 @@ fn narrow_f64_to_f32_is_danger() {
     let old = fl("ratio", FieldType::F64, 0);
     let new = fl("ratio", FieldType::F32, 0);
     let c = change("ratio", ChangeKind::TypeChanged { old_type: FieldType::F64, new_type: FieldType::F32 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — sign flip (Danger) ────────────────────────────────────────
@@ -168,7 +176,7 @@ fn sign_flip_u32_to_i32_is_danger() {
     let old = fl("count", FieldType::U32, 0);
     let new = fl("count", FieldType::I32, 0);
     let c = change("count", ChangeKind::TypeChanged { old_type: FieldType::U32, new_type: FieldType::I32 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -176,7 +184,7 @@ fn sign_flip_i64_to_u64_is_danger() {
     let old = fl("ts", FieldType::I64, 0);
     let new = fl("ts", FieldType::U64, 0);
     let c = change("ts", ChangeKind::TypeChanged { old_type: FieldType::I64, new_type: FieldType::U64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -184,7 +192,7 @@ fn sign_flip_u8_to_i8_is_danger() {
     let old = fl("b", FieldType::U8, 0);
     let new = fl("b", FieldType::I8, 0);
     let c = change("b", ChangeKind::TypeChanged { old_type: FieldType::U8, new_type: FieldType::I8 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — float ↔ integer (Danger) ───────────────────────────────────
@@ -194,7 +202,7 @@ fn float_to_int_is_danger() {
     let old = fl("rate", FieldType::F64, 0);
     let new = fl("rate", FieldType::U64, 0);
     let c = change("rate", ChangeKind::TypeChanged { old_type: FieldType::F64, new_type: FieldType::U64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -202,7 +210,7 @@ fn int_to_float_is_danger() {
     let old = fl("price", FieldType::U32, 0);
     let new = fl("price", FieldType::F32, 0);
     let c = change("price", ChangeKind::TypeChanged { old_type: FieldType::U32, new_type: FieldType::F32 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — string reinterpretation (Danger) ──────────────────────────
@@ -212,7 +220,7 @@ fn string_to_pubkey_is_danger() {
     let old = fl("label", FieldType::String, 0);
     let new = fl("label", FieldType::Pubkey, 0);
     let c = change("label", ChangeKind::TypeChanged { old_type: FieldType::String, new_type: FieldType::Pubkey }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -220,7 +228,7 @@ fn pubkey_to_string_is_danger() {
     let old = fl("addr", FieldType::Pubkey, 0);
     let new = fl("addr", FieldType::String, 0);
     let c = change("addr", ChangeKind::TypeChanged { old_type: FieldType::Pubkey, new_type: FieldType::String }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — vec reinterpretation (Danger) ─────────────────────────────
@@ -238,7 +246,7 @@ fn vec_to_non_vec_is_danger() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -254,7 +262,7 @@ fn non_vec_to_vec_is_danger() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — unknown type (Danger) ─────────────────────────────────────
@@ -272,7 +280,7 @@ fn unknown_old_type_is_danger() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 #[test]
@@ -288,7 +296,7 @@ fn unknown_new_type_is_danger() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChanged — generic reinterpretation catch-all (Danger) ───────────────
@@ -298,13 +306,13 @@ fn pubkey_to_u64_is_danger() {
     let old = fl("key", FieldType::Pubkey, 0);
     let new = fl("key", FieldType::U64, 0);
     let c = change("key", ChangeKind::TypeChanged { old_type: FieldType::Pubkey, new_type: FieldType::U64 }, Some(old), Some(new));
-    assert_eq!(classify_one(c, 0).safety, Safety::Danger);
+    assert_eq!(classify_one(c, None, false).safety, Safety::Danger);
 }
 
 // ─── TypeChangedAndReordered ──────────────────────────────────────────────────
 
 #[test]
-fn type_changed_and_reordered_widen_is_review() {
+fn type_changed_and_reordered_widen_is_danger() {
     let old = fl("count", FieldType::U32, 2);
     let new = fl("count", FieldType::U64, 0);
     let c = change(
@@ -318,7 +326,7 @@ fn type_changed_and_reordered_widen_is_review() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 2).safety, Safety::Review);
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Danger);
 }
 
 #[test]
@@ -336,17 +344,19 @@ fn type_changed_and_reordered_sign_flip_is_danger() {
         Some(old),
         Some(new),
     );
-    assert_eq!(classify_one(c, 2).safety, Safety::Danger);
+    assert_eq!(classify_one(c, Some(2), false).safety, Safety::Danger);
 }
 
 // ─── classify_all — context-derived position ──────────────────────────────────
 
 #[test]
-fn classify_all_correctly_identifies_end_add() {
+fn classify_all_end_add_is_danger_for_exact_sized_account() {
     use layoutd_core::classify::classify_all;
 
+    // Old account has one fixed field (owner: pubkey) → exact-sized.
+    // bump is added at the end: no bytes in old accounts → DANGER.
     let old_layout = fl("owner", FieldType::Pubkey, 0);
-    let new_end   = fl("bump",  FieldType::U8,     1); // index 1 == max new index
+    let new_end   = fl("bump",  FieldType::U8,     1);
 
     let changes = vec![
         FieldChange {
@@ -365,7 +375,7 @@ fn classify_all_correctly_identifies_end_add() {
 
     let classified = classify_all(changes);
     let added = classified.iter().find(|c| c.change.name == "bump").unwrap();
-    assert_eq!(added.safety, Safety::Safe);
+    assert_eq!(added.safety, Safety::Danger);
 }
 
 #[test]
@@ -409,7 +419,7 @@ fn negative_corpus_narrowing_never_safe() {
         let old = fl("x", old_ty.clone(), 0);
         let new = fl("x", new_ty.clone(), 0);
         let c = change("x", ChangeKind::TypeChanged { old_type: old_ty, new_type: new_ty }, Some(old), Some(new));
-        let result = classify_one(c, 0);
+        let result = classify_one(c, None, false);
         assert_ne!(result.safety, Safety::Safe, "narrowing must never be Safe: {:?}", result.reason);
     }
 }
@@ -427,7 +437,7 @@ fn negative_corpus_sign_flip_never_safe() {
         let old = fl("x", old_ty.clone(), 0);
         let new = fl("x", new_ty.clone(), 0);
         let c = change("x", ChangeKind::TypeChanged { old_type: old_ty, new_type: new_ty }, Some(old), Some(new));
-        let result = classify_one(c, 0);
+        let result = classify_one(c, None, false);
         assert_ne!(result.safety, Safety::Safe, "sign-flip must never be Safe: {:?}", result.reason);
     }
 }
@@ -436,6 +446,6 @@ fn negative_corpus_sign_flip_never_safe() {
 fn negative_corpus_removal_never_safe_or_review() {
     let layout = fl("secret_key", FieldType::Pubkey, 0);
     let c = change("secret_key", ChangeKind::Removed { from_index: 0 }, Some(layout), None);
-    let result = classify_one(c, 0);
+    let result = classify_one(c, None, false);
     assert_eq!(result.safety, Safety::Danger, "removal must always be Danger");
 }
